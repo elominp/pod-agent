@@ -52,8 +52,8 @@ public class Agent {
   private static boolean      restartCanaryAfterOutOfMemoryKill;
   private static boolean      immediatelyAttemptTerminationAfterCanaryIsKilled;
 
-  private interface CLibrary extends Library {
-    CLibrary INSTANCE = Native.load("c", CLibrary.class);
+  private static interface CLibrary extends Library {
+    static final CLibrary INSTANCE = Native.load("c", CLibrary.class);
   
     int kill(long pid, int signal);
   }
