@@ -1,9 +1,15 @@
 package com.elominp.pod;
 
+import com.sun.jna.Library;
+import com.sun.jna.Native;
+
 import javax.management.*;
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
 import java.lang.management.ManagementFactory;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 
 public class Agent {
@@ -19,13 +25,16 @@ public class Agent {
   private static final String DELAY_BETWEEN_MONITOR_CYCLES_DEFAULT_VALUE = "1000";
   private static final String TRIM_GLIBC_HEAP_DEFAULT_VALUE = "true";
   private static final String DELAY_BETWEEN_TRIM_GLIBC_HEAP_CYCLES_DEFAULT_VALUE = "10000";
-  private static final String CANARY_COMMAND_DEFAULT_VALUE = "memory_cushion";
+  private static final String CANARY_COMMAND_DEFAULT_VALUE = "memory-cushion";
   private static final String CANARY_MEMORY_SIZE_REQUESTED_TO_RESERVE_DEFAULT_VALUE = "16777216";
   private static final String ENABLE_USE_OF_CANARY_MEMORY_DEFAULT_VALUE = "false";
   private static final String RESTART_CANARY_AFTER_OUT_OF_MEMORY_KILL_DEFAULT_VALUE = "false";
   private static final String IMMEDIATELY_ATTEMPT_TERMINATION_AFTER_CANARY_IS_KILLED_DEFAULT_VALUE = "true";
 
   private static final int    SIGKILL_EXIT_VALUE = 137;
+  private static final int    SIGTERM_SIGNAL_NUMBER = 15;
+  private static final int    MAXIMUM_OOM_SCORE = 1000;
+  private static final int    MINIMUM_OOM_SCORE = 0;
 
   private static final Thread MONITOR_THREAD = new Thread(Agent::monitorResidentMemory);
   private static final long   CURRENT_PROCESS_ID = ProcessHandle.current().pid();
@@ -42,6 +51,12 @@ public class Agent {
   private static boolean      enableMemoryCanary;
   private static boolean      restartCanaryAfterOutOfMemoryKill;
   private static boolean      immediatelyAttemptTerminationAfterCanaryIsKilled;
+
+  private interface CLibrary extends Library {
+    CLibrary INSTANCE = Native.load("c", CLibrary.class);
+  
+    int kill(long pid, int signal);
+  }
 
   public static void premain(final String agentArgs, final Instrumentation instrumentation) throws IOException {
     delayBetweenMonitorCycles = Long.parseLong(System.getenv().getOrDefault(DELAY_BETWEEN_MONITOR_CYCLES_VARIABLE_NAME, DELAY_BETWEEN_MONITOR_CYCLES_DEFAULT_VALUE).trim());
@@ -61,8 +76,8 @@ public class Agent {
   private static void launchMemoryCanary() throws IOException {
     if (enableMemoryCanary) {
       memoryCanaryProcess = Runtime.getRuntime().exec(new String[]{memoryCanaryCommand, String.valueOf(memoryCanarySizeRequestedToReserve)});
-      adjustOutOfMemoryScore(memoryCanaryProcess.pid(), 1000); // Paint a target on the canary
-      adjustOutOfMemoryScore(CURRENT_PROCESS_ID, 0); // Divert itself from the OoM killer
+      adjustOutOfMemoryScore(memoryCanaryProcess.pid(), MAXIMUM_OOM_SCORE); // Paint a target on the canary
+      adjustOutOfMemoryScore(CURRENT_PROCESS_ID, MINIMUM_OOM_SCORE); // Divert itself from the OoM killer
     }
   }
 
@@ -111,11 +126,11 @@ public class Agent {
 
   private static void sendTerminationSignalIfNecessary() throws IOException {
     if (immediatelyAttemptTerminationAfterCanaryIsKilled) {
-      Runtime.getRuntime().exec(new String[]{ "kill", "-SIGTERM", String.valueOf(CURRENT_PROCESS_ID) });
+      CLibrary.INSTANCE.kill(CURRENT_PROCESS_ID, SIGTERM_SIGNAL_NUMBER);
     }
   }
 
   private static void adjustOutOfMemoryScore(long pid, int score) throws IOException {
-    Runtime.getRuntime().exec(String.format("echo %s > /proc/%s/oom_score_adj", score, pid));
+    Files.write(Paths.get(String.format("/proc/%s/oom_score_adj", pid)), (score + "\n").getBytes(), StandardOpenOption.APPEND);
   }
 }
